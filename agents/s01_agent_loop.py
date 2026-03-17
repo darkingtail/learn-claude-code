@@ -65,26 +65,68 @@ def run_bash(command: str) -> str:
 
 # -- The core pattern: a while loop that calls tools until the model stops --
 def agent_loop(messages: list):
+    loop_count = 0
     while True:
+        loop_count += 1
+        print(f"\n\033[35m{'='*50}")
+        print(f"  Loop #{loop_count}")
+        print(f"{'='*50}\033[0m")
+
+        # Print what we're sending to LLM
+        print(f"\033[34m[INPUT] system: {SYSTEM}\033[0m")
+        print(f"\033[34m[INPUT] tools: {[t['name'] for t in TOOLS]}\033[0m")
+        print(f"\033[34m[INPUT] messages ({len(messages)} items):\033[0m")
+        for i, msg in enumerate(messages):
+            role = msg["role"]
+            content = msg["content"]
+            if isinstance(content, str):
+                preview = content[:150]
+            elif isinstance(content, list):
+                parts = []
+                for item in content:
+                    if isinstance(item, dict):
+                        if item.get("type") == "tool_result":
+                            parts.append(f'tool_result({item["content"][:80]}...)')
+                    elif hasattr(item, "text"):
+                        parts.append(f'text({item.text[:80]}...)')
+                    elif hasattr(item, "type") and item.type == "tool_use":
+                        parts.append(f'tool_use({item.name}: {str(item.input)[:80]})')
+                preview = " | ".join(parts)
+            else:
+                preview = str(content)[:150]
+            print(f"\033[34m  [{i}] {role}: {preview}\033[0m")
+
+        print(f"\033[34m--- Calling LLM... ---\033[0m")
         response = client.messages.create(
             model=MODEL, system=SYSTEM, messages=messages,
             tools=TOOLS, max_tokens=8000,
         )
         # Append assistant turn
         messages.append({"role": "assistant", "content": response.content})
+
+        # Print raw response from LLM
+        print(f"\033[32m[RAW RESPONSE]\033[0m")
+        print(f"\033[32m{response}\033[0m")
+
         # If the model didn't call a tool, we're done
         if response.stop_reason != "tool_use":
+            print(f"\n\033[35m>>> Loop ended after {loop_count} round(s)\033[0m")
             return
         # Execute each tool call, collect results
         results = []
         for block in response.content:
             if block.type == "tool_use":
-                print(f"\033[33m$ {block.input['command']}\033[0m")
                 output = run_bash(block.input["command"])
-                print(output[:200])
+                print(f"\033[36m[tool_result] {output[:300]}\033[0m")
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": output})
         messages.append({"role": "user", "content": results})
+
+        # Wait for user to press 1 before next loop
+        step = input("\n\033[31m>>> Press 1 to continue next loop: \033[0m")
+        if step.strip() != "1":
+            print("Aborted.")
+            return
 
 
 if __name__ == "__main__":
